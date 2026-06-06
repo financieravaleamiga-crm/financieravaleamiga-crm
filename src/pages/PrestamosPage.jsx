@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAppStore } from '../store/appStore'
-import { formatCurrency, formatDate, generarWhatsApp } from '../utils/calculos'
+import { formatCurrency, formatDate, generarWhatsApp, etiquetaPeriodo } from '../utils/calculos'
 import { calcularPenalizacion, calcularRedito } from '../utils/cobranza'
 import { generarEstadoCuenta } from '../utils/pdf'
 import {
@@ -10,9 +10,12 @@ import {
 
 const EMPTY_FORM = {
   cliente_id: '',
+  tipo_prestamo: 'amortizado',
   monto_prestado: '',
   ganancia_pactada: '',
+  rendimiento_pct: '',
   num_quincenas: '6',
+  periodicidad: 'quincenal',
   fecha_inicio: new Date().toISOString().split('T')[0],
   tipo_penalizacion: 'ninguna',
   valor_penalizacion: '0',
@@ -101,10 +104,25 @@ export default function PrestamosPage() {
     fetchClientes()
   }, [])
 
-  const total     = form.monto_prestado && form.ganancia_pactada
-    ? parseFloat(form.monto_prestado) + parseFloat(form.ganancia_pactada) : 0
-  const quincenal = total && form.num_quincenas
-    ? total / parseInt(form.num_quincenas) : 0
+  const esCapVencimiento = form.tipo_prestamo === 'capital_al_vencimiento'
+  const labelPeriodo  = form.periodicidad === 'mensual' ? 'mensual' : 'quincenal'
+  const labelPeriodos = form.periodicidad === 'mensual' ? 'meses' : 'quincenas'
+
+  // Preview financiero según tipo
+  let total = 0, montoPeriodo = 0, gananciaTotal = 0
+  if (esCapVencimiento) {
+    const capital = parseFloat(form.monto_prestado) || 0
+    const rend    = parseFloat(form.rendimiento_pct) || 0
+    const nPeriodos = parseInt(form.num_quincenas) || 0
+    const intPeriodo = capital * (rend / 100)
+    gananciaTotal = intPeriodo * nPeriodos
+    total         = capital + gananciaTotal
+    montoPeriodo  = intPeriodo // interés por periodo
+  } else {
+    total         = (parseFloat(form.monto_prestado) || 0) + (parseFloat(form.ganancia_pactada) || 0)
+    montoPeriodo  = total && form.num_quincenas ? total / parseInt(form.num_quincenas) : 0
+    gananciaTotal = parseFloat(form.ganancia_pactada) || 0
+  }
 
   /* ─── Crear préstamo ─── */
   const handleSubmit = async (e) => {
@@ -112,13 +130,20 @@ export default function PrestamosPage() {
     setError('')
     setSaving(true)
     try {
-      await createPrestamo({
+      const base = {
         ...form,
         monto_prestado:     parseFloat(form.monto_prestado),
-        ganancia_pactada:   parseFloat(form.ganancia_pactada),
         num_quincenas:      parseInt(form.num_quincenas),
         valor_penalizacion: parseFloat(form.valor_penalizacion),
-      })
+      }
+      if (form.tipo_prestamo === 'capital_al_vencimiento') {
+        base.rendimiento_pct  = parseFloat(form.rendimiento_pct)
+        base.ganancia_pactada = 0 // se recalcula en store
+      } else {
+        base.ganancia_pactada = parseFloat(form.ganancia_pactada)
+        base.rendimiento_pct  = null
+      }
+      await createPrestamo(base)
       setForm(EMPTY_FORM)
       setShowForm(false)
     } catch (err) {
@@ -272,12 +297,22 @@ export default function PrestamosPage() {
   const datosLiquidacion = liquidarPrestamo
     ? (() => {
         const pagos   = pagosPorPrestamo[liquidarPrestamo.id] || []
-        const saldo   = pagos
-          .filter(p => !p.pagado)
-          .reduce((s, p) => s + parseFloat(p.saldo_restante ?? p.monto_programado ?? 0), 0)
+        const pendientes = pagos.filter(p => !p.pagado)
+        const esCapVenc = liquidarPrestamo.tipo_prestamo === 'capital_al_vencimiento'
+
+        if (esCapVenc) {
+          const capitalPend   = pendientes.reduce((s, p) => s + parseFloat(p.monto_capital || 0), 0)
+          const interesesPend = pendientes.reduce((s, p) =>
+            s + parseFloat(p.saldo_restante ?? p.monto_programado ?? 0) - parseFloat(p.monto_capital || 0), 0)
+          const dctoIntereses = interesesPend * (descuentoPct / 100)
+          const totalLiq      = capitalPend + interesesPend - dctoIntereses
+          return { saldo: capitalPend + interesesPend, capitalPend, interesesPend, dcto: dctoIntereses, totalLiq, esCapVenc: true }
+        }
+
+        const saldo   = pendientes.reduce((s, p) => s + parseFloat(p.saldo_restante ?? p.monto_programado ?? 0), 0)
         const dcto    = saldo * (descuentoPct / 100)
         const totalLiq = saldo - dcto
-        return { saldo, dcto, totalLiq }
+        return { saldo, dcto, totalLiq, esCapVenc: false }
       })()
     : null
 
@@ -350,12 +385,24 @@ export default function PrestamosPage() {
                       <p className="text-sm font-black text-brand-600">{formatCurrency(p.total_a_recuperar)}</p>
                     </div>
                     <div>
-                      <p className="text-xs text-gray-400">Quincenal</p>
-                      <p className="text-sm font-black text-gray-800">{formatCurrency(p.monto_quincenal)}</p>
+                      {p.tipo_prestamo === 'capital_al_vencimiento' ? (
+                        <>
+                          <p className="text-xs text-gray-400">Rend. {etiquetaPeriodo(p.periodicidad || 'mensual', false)}</p>
+                          <p className="text-sm font-black text-gray-800">{p.rendimiento_pct}%</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-xs text-gray-400">{etiquetaPeriodo(p.periodicidad || 'quincenal', false).charAt(0).toUpperCase() + etiquetaPeriodo(p.periodicidad || 'quincenal', false).slice(1)}</p>
+                          <p className="text-sm font-black text-gray-800">{formatCurrency(p.monto_quincenal)}</p>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <div className="text-xs text-gray-400 mt-2">
-                    {p.num_quincenas} quincenas · {p.clientes?.telefono}
+                  <div className="text-xs text-gray-400 mt-2 flex items-center gap-1.5">
+                    {p.tipo_prestamo === 'capital_al_vencimiento' && (
+                      <span className="bg-indigo-100 text-indigo-700 font-semibold px-1.5 py-0.5 rounded-md">Cap. Venc.</span>
+                    )}
+                    {p.num_quincenas} {etiquetaPeriodo(p.periodicidad || 'quincenal', true)} · {p.clientes?.telefono}
                   </div>
                 </button>
 
@@ -468,6 +515,9 @@ export default function PrestamosPage() {
                             </div>
 
                             {/* Badges de estado especial */}
+                            {pago.es_pago_capital && (
+                              <p className="text-xs text-indigo-600 font-bold mb-1">💰 Pago final: interés + capital (${formatCurrency(pago.monto_capital)})</p>
+                            )}
                             {pago.quincena_acumulada && (
                               <p className="text-xs text-orange-600 font-semibold mb-1">⚠ Quincena acumulada</p>
                             )}
@@ -537,14 +587,14 @@ export default function PrestamosPage() {
 
       {/* ─── Modal: Nuevo Préstamo ─── */}
       {showForm && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end">
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-end">
           <div className="bg-white rounded-t-3xl w-full max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between p-5 pb-3 shrink-0">
               <h2 className="text-lg font-black text-gray-800">Nuevo Préstamo</h2>
               <button onClick={() => setShowForm(false)} className="text-gray-400"><X size={22} /></button>
             </div>
 
-            <form onSubmit={handleSubmit} className="overflow-y-auto px-5 pb-8 space-y-3">
+            <form id="form-nuevo-prestamo" onSubmit={handleSubmit} className="overflow-y-auto px-5 pb-3 space-y-3 flex-1">
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">Cliente *</label>
                 <select
@@ -560,43 +610,108 @@ export default function PrestamosPage() {
                 </select>
               </div>
 
-              {[
-                { label: 'Monto prestado *', key: 'monto_prestado' },
-                { label: 'Ganancia pactada *', key: 'ganancia_pactada' },
-              ].map(({ label, key }) => (
-                <div key={key}>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">{label}</label>
+              {/* ─ Tipo de préstamo ─ */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Tipo de préstamo *</label>
+                <select
+                  value={form.tipo_prestamo}
+                  onChange={e => setForm(f => ({ ...f, tipo_prestamo: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                >
+                  <option value="amortizado">Amortización tradicional</option>
+                  <option value="capital_al_vencimiento">Interés periódico + capital al vencimiento</option>
+                </select>
+              </div>
+
+              {/* ─ Monto prestado (siempre) ─ */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Monto prestado *</label>
+                <input
+                  type="number" required min="0" step="0.01"
+                  value={form.monto_prestado}
+                  onChange={e => setForm(f => ({ ...f, monto_prestado: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                />
+              </div>
+
+              {/* ─ Campo condicional según tipo ─ */}
+              {esCapVencimiento ? (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Rendimiento por periodo (%) *</label>
                   <input
                     type="number" required min="0" step="0.01"
-                    value={form[key]}
-                    onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                    placeholder="Ej: 10"
+                    value={form.rendimiento_pct}
+                    onChange={e => setForm(f => ({ ...f, rendimiento_pct: e.target.value }))}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
                   />
                 </div>
-              ))}
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Ganancia pactada *</label>
+                  <input
+                    type="number" required min="0" step="0.01"
+                    value={form.ganancia_pactada}
+                    onChange={e => setForm(f => ({ ...f, ganancia_pactada: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  />
+                </div>
+              )}
 
-              {total > 0 && (
-                <div className="bg-brand-50 rounded-xl p-3 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-brand-700">Total a recuperar</span>
-                    <span className="font-black text-brand-700">{formatCurrency(total)}</span>
-                  </div>
-                  <div className="flex justify-between mt-1">
-                    <span className="text-brand-600 text-xs">Pago quincenal estimado</span>
-                    <span className="font-bold text-brand-600 text-xs">{formatCurrency(quincenal)}</span>
-                  </div>
+              {/* ─ Preview financiero ─ */}
+              {(esCapVencimiento ? (form.monto_prestado && form.rendimiento_pct) : (form.monto_prestado && form.ganancia_pactada)) && (
+                <div className="bg-brand-50 rounded-xl p-3 text-sm space-y-1">
+                  {esCapVencimiento ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-brand-700">Interés por {labelPeriodo}</span>
+                        <span className="font-black text-brand-700">{formatCurrency(montoPeriodo)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-brand-600 text-xs">Último pago (interés + capital)</span>
+                        <span className="font-bold text-brand-600 text-xs">{formatCurrency(montoPeriodo + (parseFloat(form.monto_prestado) || 0))}</span>
+                      </div>
+                      <div className="flex justify-between border-t border-brand-200 pt-1 mt-1">
+                        <span className="text-brand-700 font-semibold">Total a recuperar</span>
+                        <span className="font-black text-brand-700">{formatCurrency(total)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-brand-700">Total a recuperar</span>
+                        <span className="font-black text-brand-700">{formatCurrency(total)}</span>
+                      </div>
+                      <div className="flex justify-between mt-1">
+                        <span className="text-brand-600 text-xs">Pago {labelPeriodo} estimado</span>
+                        <span className="font-bold text-brand-600 text-xs">{formatCurrency(montoPeriodo)}</span>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Número de quincenas *</label>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Periodicidad *</label>
+                <select
+                  value={form.periodicidad}
+                  onChange={e => setForm(f => ({ ...f, periodicidad: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                >
+                  <option value="quincenal">Quincenal (cada 15 días)</option>
+                  <option value="mensual">Mensual (cada mes)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Número de {labelPeriodos} *</label>
                 <select
                   value={form.num_quincenas}
                   onChange={e => setForm(f => ({ ...f, num_quincenas: e.target.value }))}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
                 >
                   {[1,2,3,4,5,6,8,10,12,16,20,24].map(n => (
-                    <option key={n} value={n}>{n} quincenas</option>
+                    <option key={n} value={n}>{n} {labelPeriodos}</option>
                   ))}
                 </select>
               </div>
@@ -614,21 +729,25 @@ export default function PrestamosPage() {
               {error && (
                 <div className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl px-3 py-2">{error}</div>
               )}
+            </form>
 
+            <div className="shrink-0 px-5 pt-3 pb-6 border-t border-gray-100 bg-white">
               <button
-                type="submit" disabled={saving}
-                className="w-full bg-brand-600 text-white font-bold py-3 rounded-xl mt-2 disabled:opacity-60"
+                type="submit"
+                form="form-nuevo-prestamo"
+                disabled={saving}
+                className="w-full bg-brand-600 text-white font-bold py-3.5 rounded-xl mt-1 disabled:opacity-60"
               >
                 {saving ? 'Creando préstamo...' : 'Crear Préstamo'}
               </button>
-            </form>
+            </div>
           </div>
         </div>
       )}
 
       {/* ─── Modal: Registrar Pago / Penalizar / Postergar ─── */}
       {pagoSelected && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end">
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-end">
           <div className="bg-white rounded-t-3xl w-full max-h-[92vh] flex flex-col">
             <div className="flex items-center justify-between p-5 pb-3 shrink-0">
               <h2 className="text-lg font-black text-gray-800">
@@ -659,7 +778,7 @@ export default function PrestamosPage() {
               ))}
             </div>
 
-            <div className="overflow-y-auto px-5 pb-8 space-y-3">
+            <div className="overflow-y-auto px-5 pb-3 space-y-3 flex-1">
               {pagoSuccess && (
                 <div className="bg-green-50 border border-green-200 text-green-700 text-sm rounded-xl px-3 py-2 font-semibold">{pagoSuccess}</div>
               )}
@@ -669,7 +788,7 @@ export default function PrestamosPage() {
 
               {/* PAGO NORMAL */}
               {pagoModo === 'pago' && (
-                <form onSubmit={handleRegistrarPago} className="space-y-3">
+                <form id="pp-form-pago" onSubmit={handleRegistrarPago} className="space-y-3">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Monto a registrar *</label>
                     <input type="number" required min="0.01" step="0.01"
@@ -684,16 +803,12 @@ export default function PrestamosPage() {
                       className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
                     />
                   </div>
-                  <button type="submit" disabled={pagoSaving}
-                    className="w-full bg-brand-600 text-white font-bold py-3 rounded-xl disabled:opacity-60">
-                    {pagoSaving ? 'Guardando...' : 'Confirmar Pago'}
-                  </button>
                 </form>
               )}
 
               {/* PENALIZACIÓN */}
               {pagoModo === 'penalizacion' && (
-                <form onSubmit={handlePenalizacionPrestamo} className="space-y-3">
+                <form id="pp-form-penalizacion" onSubmit={handlePenalizacionPrestamo} className="space-y-3">
                   <div className="bg-red-50 border border-red-100 rounded-xl px-3 py-2 text-xs text-red-700">
                     La penalización se suma al saldo pendiente de este pago.
                   </div>
@@ -731,16 +846,12 @@ export default function PrestamosPage() {
                       </div>
                     )
                   })()}
-                  <button type="submit" disabled={pagoSaving}
-                    className="w-full bg-red-500 text-white font-bold py-3 rounded-xl disabled:opacity-60">
-                    {pagoSaving ? 'Aplicando...' : 'Aplicar Penalización'}
-                  </button>
                 </form>
               )}
 
               {/* POSTERGAR */}
               {pagoModo === 'postergar' && (
-                <form onSubmit={handlePostergarPrestamo} className="space-y-3">
+                <form id="pp-form-postergar" onSubmit={handlePostergarPrestamo} className="space-y-3">
                   <div className="bg-purple-50 border border-purple-100 rounded-xl px-3 py-2 text-xs text-purple-700">
                     El cliente paga el rédito y la quincena se acumula al siguiente cobro.
                   </div>
@@ -778,13 +889,30 @@ export default function PrestamosPage() {
                       </div>
                     )
                   })()}
-                  <button type="submit" disabled={pagoSaving}
-                    className="w-full bg-purple-500 text-white font-bold py-3 rounded-xl disabled:opacity-60">
-                    {pagoSaving ? 'Procesando...' : 'Confirmar Postergación'}
-                  </button>
                 </form>
               )}
             </div>
+
+            {/* Botón de acción — FIJO en la parte inferior */}
+            {!pagoSuccess && (() => {
+              const ppBtnConfig = {
+                pago:        { form: 'pp-form-pago',        label: pagoSaving ? 'Guardando…' : 'Confirmar Pago',        cls: 'bg-brand-600' },
+                penalizacion:{ form: 'pp-form-penalizacion', label: pagoSaving ? 'Aplicando…' : 'Aplicar Penalización',  cls: 'bg-red-500' },
+                postergar:   { form: 'pp-form-postergar',   label: pagoSaving ? 'Procesando…' : 'Confirmar Postergación', cls: 'bg-purple-500' },
+              }[pagoModo]
+              return (
+                <div className="shrink-0 px-5 pt-3 pb-6 border-t border-gray-100 bg-white">
+                  <button
+                    type="submit"
+                    form={ppBtnConfig.form}
+                    disabled={pagoSaving}
+                    className={`w-full text-white font-bold py-3.5 rounded-xl disabled:opacity-60 ${ppBtnConfig.cls}`}
+                  >
+                    {ppBtnConfig.label}
+                  </button>
+                </div>
+              )
+            })()}
           </div>
         </div>
       )}
@@ -802,29 +930,66 @@ export default function PrestamosPage() {
             </p>
 
             <div className="bg-blue-50 rounded-xl p-3 mb-4 space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-600">Saldo pendiente</span>
-                <span className="font-black text-gray-800">{formatCurrency(datosLiquidacion.saldo)}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-gray-600">Descuento</span>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={descuentoPct}
-                    onChange={e => setDescuentoPct(Number(e.target.value))}
-                    className="text-xs border border-blue-200 rounded-lg px-2 py-1 text-blue-700 font-bold bg-white"
-                  >
-                    {[5, 10, 15, 20, 25, 30].map(n => (
-                      <option key={n} value={n}>{n}%</option>
-                    ))}
-                  </select>
-                  <span className="font-bold text-green-600">−{formatCurrency(datosLiquidacion.dcto)}</span>
-                </div>
-              </div>
-              <div className="flex justify-between pt-2 border-t border-blue-100">
-                <span className="text-blue-700 font-bold">Total a liquidar</span>
-                <span className="font-black text-blue-700 text-base">{formatCurrency(datosLiquidacion.totalLiq)}</span>
-              </div>
+              {datosLiquidacion.esCapVenc ? (
+                <>
+                  <div className="flex justify-between text-xs text-gray-500 uppercase tracking-wide font-semibold pb-1 border-b border-blue-100">
+                    <span>Desglose capital al vencimiento</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Capital pendiente</span>
+                    <span className="font-black text-gray-800">{formatCurrency(datosLiquidacion.capitalPend)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Intereses pendientes</span>
+                    <span className="font-bold text-gray-700">{formatCurrency(datosLiquidacion.interesesPend)}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Descuento (sobre intereses)</span>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={descuentoPct}
+                        onChange={e => setDescuentoPct(Number(e.target.value))}
+                        className="text-xs border border-blue-200 rounded-lg px-2 py-1 text-blue-700 font-bold bg-white"
+                      >
+                        {[0, 5, 10, 15, 20, 25, 30].map(n => (
+                          <option key={n} value={n}>{n}%</option>
+                        ))}
+                      </select>
+                      <span className="font-bold text-green-600">−{formatCurrency(datosLiquidacion.dcto)}</span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between pt-2 border-t border-blue-100">
+                    <span className="text-blue-700 font-bold">Total a liquidar</span>
+                    <span className="font-black text-blue-700 text-base">{formatCurrency(datosLiquidacion.totalLiq)}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Saldo pendiente</span>
+                    <span className="font-black text-gray-800">{formatCurrency(datosLiquidacion.saldo)}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Descuento</span>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={descuentoPct}
+                        onChange={e => setDescuentoPct(Number(e.target.value))}
+                        className="text-xs border border-blue-200 rounded-lg px-2 py-1 text-blue-700 font-bold bg-white"
+                      >
+                        {[5, 10, 15, 20, 25, 30].map(n => (
+                          <option key={n} value={n}>{n}%</option>
+                        ))}
+                      </select>
+                      <span className="font-bold text-green-600">−{formatCurrency(datosLiquidacion.dcto)}</span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between pt-2 border-t border-blue-100">
+                    <span className="text-blue-700 font-bold">Total a liquidar</span>
+                    <span className="font-black text-blue-700 text-base">{formatCurrency(datosLiquidacion.totalLiq)}</span>
+                  </div>
+                </>
+              )}
             </div>
 
             {liquidarError && (

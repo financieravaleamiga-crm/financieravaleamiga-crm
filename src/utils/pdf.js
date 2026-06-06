@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { formatCurrency, formatDate } from './calculos'
+import { formatCurrency, formatDate, etiquetaPeriodo } from './calculos'
 import { supabase } from '../lib/supabase'
 
 // ─── Colores corporativos (escala de grises/azul oscuro) ────────────────────
@@ -52,15 +52,19 @@ function seccionTitulo(doc, texto, y, margin, pageW) {
 
 // ─── Obtener datos de la empresa y banco ────────────────────────────────────
 async function obtenerConfigEmpresa() {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { empresa: {}, banco: {} }
+  try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { empresa: {}, banco: {} }
 
-  const [{ data: empresa }, { data: banco }] = await Promise.all([
-    supabase.from('empresa_config').select('*').eq('user_id', user.id).single(),
-    supabase.from('datos_bancarios').select('*').eq('user_id', user.id).single(),
-  ])
+    const [{ data: empresa }, { data: banco }] = await Promise.all([
+      supabase.from('empresa_config').select('*').eq('user_id', user.id).maybeSingle(),
+      supabase.from('datos_bancarios').select('*').eq('user_id', user.id).maybeSingle(),
+    ])
 
-  return { empresa: empresa || {}, banco: banco || {} }
+    return { empresa: empresa || {}, banco: banco || {} }
+  } catch {
+    return { empresa: {}, banco: {} }
+  }
 }
 
 // ─── Obtener historial de un préstamo ────────────────────────────────────────
@@ -134,7 +138,7 @@ export async function generarEstadoCuenta(cliente, prestamo, pagos) {
   doc.setFontSize(6.5)
   doc.setFont('helvetica', 'italic')
   doc.text(
-    'El monto de liquidacion anticipada puede cambiar al entrar nuevas quincenas, penalizaciones o postergaciones.',
+    'El monto de liquidacion anticipada puede cambiar al registrar nuevos pagos, penalizaciones o postergaciones.',
     pageW / 2, 43, { align: 'center' }
   )
 
@@ -181,14 +185,40 @@ export async function generarEstadoCuenta(cliente, prestamo, pagos) {
 
   const colMid = (pageW - margin * 2) / 2
 
-  const resumenIzq = [
+  const periodoSingular = etiquetaPeriodo(prestamo.periodicidad || 'quincenal', false)
+  const periodoPlural   = etiquetaPeriodo(prestamo.periodicidad || 'quincenal', true)
+  const esCapVenc       = prestamo.tipo_prestamo === 'capital_al_vencimiento'
+
+  // Calcular capital e intereses pendientes para capital_al_vencimiento
+  const capitalPendientePDF    = esCapVenc
+    ? pagos.filter(p => !p.pagado).reduce((s, p) => s + parseFloat(p.monto_capital || 0), 0)
+    : null
+  const interesesPendientesPDF = esCapVenc
+    ? pagos.filter(p => !p.pagado).reduce((s, p) =>
+        s + parseFloat(p.saldo_restante ?? p.monto_programado ?? 0) - parseFloat(p.monto_capital || 0), 0)
+    : null
+
+  const resumenIzq = esCapVenc ? [
+    ['Tipo de préstamo:',     'Cap. al vencimiento'],
+    ['Monto prestado:',       formatCurrency(prestamo.monto_prestado)],
+    ['Rendimiento por periodo:', `${prestamo.rendimiento_pct}%`],
+    ['Total a recuperar:',    formatCurrency(prestamo.total_a_recuperar)],
+    [`No. de ${periodoPlural}:`, String(prestamo.num_quincenas)],
+  ] : [
+    ['Tipo de préstamo:',     'Amortización tradicional'],
     ['Monto prestado:',       formatCurrency(prestamo.monto_prestado)],
     ['Ganancia pactada:',     formatCurrency(prestamo.ganancia_pactada)],
     ['Total a recuperar:',    formatCurrency(prestamo.total_a_recuperar)],
-    ['No. de quincenas:',     String(prestamo.num_quincenas)],
-    ['Monto por quincena:',   formatCurrency(prestamo.monto_quincenal)],
+    [`No. de ${periodoPlural}:`, String(prestamo.num_quincenas)],
   ]
-  const resumenDer = [
+
+  const resumenDer = esCapVenc ? [
+    ['Total pagado:',         formatCurrency(totalRecuperado)],
+    ['Capital pendiente:',    formatCurrency(capitalPendientePDF)],
+    ['Intereses pendientes:', formatCurrency(interesesPendientesPDF)],
+    ['Saldo total pend.:',    formatCurrency(saldoPendiente)],
+    ['Estatus:',              (prestamo.estatus || '').toUpperCase()],
+  ] : [
     ['Total pagado:',         formatCurrency(totalRecuperado)],
     ['Saldo pendiente:',      formatCurrency(saldoPendiente)],
     ['% Recuperado:',         `${porcentaje}%`],
@@ -320,32 +350,46 @@ export async function generarEstadoCuenta(cliente, prestamo, pagos) {
     return 'PENDIENTE'
   }
 
-  const tablaRows = pagosOrdenados.map(p => [
-    p.numero_pago,
-    fmtFecha(p.fecha_vencimiento),
-    formatCurrency(p.monto_programado),
-    estatusLabel(p),
-    parseFloat(p.monto_pagado || 0) > 0      ? formatCurrency(p.monto_pagado)   : '—',
-    parseFloat(p.saldo_restante ?? 0) > 0     ? formatCurrency(p.saldo_restante) : '—',
-    p.postergado                              ? 'Si' : '—',
-    p.estatus === 'liquidado'                 ? 'Si' : '—',
-  ])
+  const tablaRows = esCapVenc
+    ? pagosOrdenados.map(p => [
+        p.numero_pago,
+        fmtFecha(p.fecha_vencimiento),
+        formatCurrency(p.monto_interes || 0),
+        parseFloat(p.monto_capital || 0) > 0 ? formatCurrency(p.monto_capital) : '—',
+        formatCurrency(p.monto_programado),
+        estatusLabel(p),
+        parseFloat(p.monto_pagado || 0) > 0      ? formatCurrency(p.monto_pagado)   : '—',
+        parseFloat(p.saldo_restante ?? 0) > 0     ? formatCurrency(p.saldo_restante) : '—',
+      ])
+    : pagosOrdenados.map(p => [
+        p.numero_pago,
+        fmtFecha(p.fecha_vencimiento),
+        formatCurrency(p.monto_programado),
+        estatusLabel(p),
+        parseFloat(p.monto_pagado || 0) > 0      ? formatCurrency(p.monto_pagado)   : '—',
+        parseFloat(p.saldo_restante ?? 0) > 0     ? formatCurrency(p.saldo_restante) : '—',
+        p.postergado                              ? 'Si' : '—',
+        p.estatus === 'liquidado'                 ? 'Si' : '—',
+      ])
 
   autoTable(doc, {
     startY: y,
-    head: [['#', 'Fecha', 'Monto', 'Estado', 'Pagado', 'Pendiente', 'Poster.', 'Liquid.']],
+    head: [esCapVenc
+      ? ['#', 'Fecha', 'Interés', 'Capital', 'Total', 'Estado', 'Pagado', 'Pendiente']
+      : ['#', 'Fecha', 'Monto', 'Estado', 'Pagado', 'Pendiente', 'Poster.', 'Liquid.']
+    ],
     body: tablaRows,
     styles:      { fontSize: 7, cellPadding: 2, font: 'helvetica', textColor: C.black },
     headStyles:  { fillColor: C.navy, textColor: C.white, fontStyle: 'bold', fontSize: 7 },
     alternateRowStyles: { fillColor: C.ultraLight },
     columnStyles: {
       0: { halign: 'center', cellWidth: 8 },
-      3: { halign: 'center' },
-      6: { halign: 'center', cellWidth: 14 },
-      7: { halign: 'center', cellWidth: 14 },
+      [esCapVenc ? 5 : 3]: { halign: 'center' },
+      ...(esCapVenc ? {} : { 6: { halign: 'center', cellWidth: 14 }, 7: { halign: 'center', cellWidth: 14 } }),
     },
     didParseCell: (data) => {
-      if (data.section === 'body' && data.column.index === 3) {
+      const statusColIdx = esCapVenc ? 5 : 3
+      if (data.section === 'body' && data.column.index === statusColIdx) {
         const v = data.cell.raw
         if (v === 'PAGADO' || v === 'LIQUIDADO') data.cell.styles.textColor = [30, 100, 30]
         else if (v === 'VENCIDO')                data.cell.styles.textColor = [180, 30, 30]
@@ -470,3 +514,175 @@ export async function generarEstadoCuenta(cliente, prestamo, pagos) {
 
 // Mantener compatibilidad con el nombre anterior
 export const generarPDFPrestamo = generarEstadoCuenta
+
+// ─── RECIBO DE COBRO (una sola página) ──────────────────────────────────────
+export async function generarReciboCobro(pago, prestamo, cliente, todosPagos) {
+  const { empresa, banco } = await obtenerConfigEmpresa()
+
+  const doc    = new jsPDF({ format: 'letter', unit: 'mm' })
+  const pageW  = doc.internal.pageSize.getWidth()
+  const pageH  = doc.internal.pageSize.getHeight()
+  const margin = 16
+
+  const hoy     = new Date()
+  const hoyStr  = hoy.toISOString().split('T')[0]
+
+  // Cálculo de totales
+  const pagosOrdenados = [...(todosPagos || [])].sort((a, b) => a.numero_pago - b.numero_pago)
+  const totalRecuperado = pagosOrdenados.reduce((s, p) => s + parseFloat(p.monto_pagado || 0), 0)
+  const saldoPendiente  = Math.max(0, parseFloat(prestamo.total_a_recuperar || 0) - totalRecuperado)
+  const descMonto       = saldoPendiente * 0.10
+  const totalLiquidar   = saldoPendiente - descMonto
+  const montoAPagar     = parseFloat(pago.saldo_restante ?? pago.monto_programado ?? 0)
+  const totalPagos      = prestamo.num_quincenas || pagosOrdenados.length
+
+  // ── ENCABEZADO ────────────────────────────────────────────────────────────
+  doc.setFillColor(...C.navy)
+  doc.rect(0, 0, pageW, 32, 'F')
+
+  const nombreEmpresa = empresa.nombre_comercial || empresa.nombre_empresa || 'Mi Empresa'
+  doc.setTextColor(...C.white)
+  doc.setFontSize(15)
+  doc.setFont('helvetica', 'bold')
+  doc.text(nombreEmpresa, margin, 13)
+
+  doc.setFontSize(7)
+  doc.setFont('helvetica', 'normal')
+  doc.setTextColor(190, 210, 235)
+  const lineasContacto = [
+    empresa.telefono  ? `Tel: ${empresa.telefono}` : null,
+    empresa.correo    || null,
+    [empresa.ciudad, empresa.estado].filter(Boolean).join(', ') || null,
+  ].filter(Boolean)
+  lineasContacto.forEach((l, i) => doc.text(l, margin, 19 + i * 4))
+
+  doc.setTextColor(...C.white)
+  doc.setFontSize(12)
+  doc.setFont('helvetica', 'bold')
+  doc.text('RECIBO DE COBRO', pageW - margin, 13, { align: 'right' })
+  doc.setFontSize(7)
+  doc.setFont('helvetica', 'normal')
+  doc.setTextColor(190, 210, 235)
+  doc.text(`Emitido: ${fmtFechaLarga(hoyStr)}`, pageW - margin, 20, { align: 'right' })
+  doc.text(`Ref: ${pago.id?.slice(0, 8).toUpperCase() || '—'}`, pageW - margin, 25, { align: 'right' })
+
+  let y = 42
+
+  // ── DATOS DEL CLIENTE ─────────────────────────────────────────────────────
+  y = seccionTitulo(doc, 'Datos del cliente', y, margin, pageW)
+  y += 6
+
+  const setLbl = () => { doc.setFont('helvetica', 'bold');  doc.setFontSize(8.5); doc.setTextColor(...C.darkGray) }
+  const setVal = () => { doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...C.black) }
+
+  const clienteRows = [
+    ['Nombre:',   cliente.nombre    || '—'],
+    ['Teléfono:', cliente.telefono  || '—'],
+  ]
+  clienteRows.forEach(([lbl, val], i) => {
+    setLbl(); doc.text(lbl, margin, y + i * 6)
+    setVal(); doc.text(String(val), margin + 28, y + i * 6)
+  })
+  y += clienteRows.length * 6 + 4
+  linea(doc, y, margin, pageW)
+  y += 5
+
+  // ── DETALLE DEL PAGO ──────────────────────────────────────────────────────
+  y = seccionTitulo(doc, 'Detalle del pago', y, margin, pageW)
+  y += 6
+
+  // Caja principal
+  doc.setFillColor(...C.navyLight)
+  doc.roundedRect(margin, y - 3, pageW - margin * 2, 60, 3, 3, 'F')
+  y += 2
+
+  const col2 = margin + (pageW - margin * 2) / 2 + 2
+
+  const pagoDetalleIzq = [
+    ['Número de pago:',    `${pago.numero_pago} de ${totalPagos}`],
+    ['Fecha de emisión:',  fmtFechaLarga(hoyStr)],
+    ['Fecha límite:',      fmtFechaLarga(pago.fecha_vencimiento)],
+  ]
+  const pagoDetalleDer = [
+    ['Monto a pagar:',     formatCurrency(montoAPagar)],
+    ['Total pendiente:',   formatCurrency(saldoPendiente)],
+    ['Para liquidar hoy:', formatCurrency(totalLiquidar)],
+  ]
+
+  pagoDetalleIzq.forEach(([lbl, val], i) => {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(...C.navy)
+    doc.text(lbl, margin + 5, y + i * 7)
+    doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.black)
+    doc.text(String(val), margin + 5, y + i * 7 + 3.5)
+  })
+  pagoDetalleDer.forEach(([lbl, val], i) => {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(...C.navy)
+    doc.text(lbl, col2, y + i * 7)
+    doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.black)
+    // Destacar montos
+    if (lbl === 'Para liquidar hoy:') {
+      doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 100, 30)
+    }
+    doc.text(String(val), col2, y + i * 7 + 3.5)
+  })
+
+  y += pagoDetalleIzq.length * 7 + 12
+
+  // Línea separadora del total
+  linea(doc, y, margin + 4, pageW - margin - 4, 0.4, C.navy)
+  y += 6
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...C.navy)
+  doc.text('MONTO A PAGAR:', margin + 5, y)
+  doc.setFontSize(12); doc.setTextColor(20, 80, 20)
+  doc.text(formatCurrency(montoAPagar), pageW - margin - 5, y, { align: 'right' })
+
+  y += 12
+  linea(doc, y, margin, pageW)
+  y += 6
+
+  // ── DATOS BANCARIOS ───────────────────────────────────────────────────────
+  y = seccionTitulo(doc, 'Datos para realizar el pago', y, margin, pageW)
+  y += 6
+
+  doc.setFillColor(...C.ultraLight)
+  doc.roundedRect(margin, y - 3, pageW - margin * 2, 36, 3, 3, 'F')
+  y += 2
+
+  const bancoRows = [
+    ['Banco:',         banco.banco      || '—'],
+    ['Titular:',       banco.titular    || '—'],
+    ['No. de cuenta:', banco.num_cuenta || '—'],
+    ['CLABE:',         banco.clabe      || '—'],
+    ['Tarjeta:',       banco.tarjeta    || '—'],
+  ].filter(([, v]) => v !== '—')  // solo mostrar los que tienen dato
+
+  const mid = Math.ceil(bancoRows.length / 2)
+  bancoRows.forEach(([lbl, val], i) => {
+    const isRight = i >= mid
+    const xBase   = isRight ? col2 : margin + 5
+    const row     = isRight ? i - mid : i
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setTextColor(...C.navy)
+    doc.text(lbl, xBase, y + row * 6)
+    doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.black)
+    doc.text(String(val), xBase + 28, y + row * 6)
+  })
+
+  if (banco.observaciones) {
+    y += mid * 6 + 4
+    doc.setFontSize(7.5); doc.setFont('helvetica', 'italic'); doc.setTextColor(...C.darkGray)
+    doc.text(`Instrucciones: ${banco.observaciones}`, margin + 5, y, { maxWidth: pageW - margin * 2 - 8 })
+    y += 10
+  }
+
+  // ── PIE ───────────────────────────────────────────────────────────────────
+  linea(doc, pageH - 14, margin, pageW, 0.3, C.lightGray)
+  doc.setFontSize(6); doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.medGray)
+  doc.text(
+    `${nombreEmpresa}  |  Recibo emitido el ${fmtFechaLarga(hoyStr)}  |  Documento no oficial`,
+    pageW / 2, pageH - 9, { align: 'center' }
+  )
+
+  const nombreArchivo = `recibo_cobro_${(cliente.nombre || 'cliente').replace(/\s+/g, '_')}_pago${pago.numero_pago}_${hoyStr}.pdf`
+  doc.save(nombreArchivo)
+}
+

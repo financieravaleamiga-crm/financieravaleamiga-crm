@@ -317,27 +317,38 @@ export default function DashboardPage() {
       {/* ── HEADER ─────────────────────────────────────────────── */}
       <div
         className="relative pt-12 pb-8 px-4 overflow-hidden"
-        style={{ background: 'linear-gradient(135deg, #1e3a5f 0%, #0f62a8 100%)' }}
+        style={{ background: 'linear-gradient(135deg, #003d2b 0%, #00211a 100%)' }}
       >
         {/* decorative circles */}
         <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full opacity-10 bg-white" />
-        <div className="absolute top-4 -right-6 w-24 h-24 rounded-full opacity-10 bg-white" />
+        <div className="absolute top-4 -right-6 w-24 h-24 rounded-full opacity-10" style={{ background: '#00D886' }} />
 
         <div className="flex items-center justify-between mb-5 relative z-10">
           <div>
-            <p className="text-blue-200 text-xs font-semibold uppercase tracking-widest">Panel de trabajo</p>
-            <h1 className="text-white font-black text-2xl leading-tight">PrestApp 💰</h1>
+            <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#00D886', opacity: 0.8 }}>Panel de trabajo</p>
+            <img
+              src="https://i.postimg.cc/Qx4yMXqx/logo-horizontal.png"
+              alt="PRESTAAPP"
+              className="h-8 w-auto object-contain mt-1"
+              onError={(e) => {
+                e.target.style.display = 'none'
+                e.target.nextSibling.style.display = 'block'
+              }}
+            />
+            <span className="hidden text-white font-black text-2xl leading-tight">PRESTAAPP</span>
           </div>
           <div className="flex gap-2">
             <button
               onClick={handleRefresh}
-              className="text-blue-200 hover:text-white p-2 transition active:scale-90"
+              className="hover:text-white p-2 transition active:scale-90"
+              style={{ color: '#00D886', opacity: 0.8 }}
             >
               <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
             </button>
             <button
               onClick={signOut}
-              className="text-blue-200 hover:text-white p-2 transition active:scale-90"
+              className="hover:text-white p-2 transition active:scale-90"
+              style={{ color: '#00D886', opacity: 0.8 }}
             >
               <LogOut size={18} />
             </button>
@@ -345,18 +356,18 @@ export default function DashboardPage() {
         </div>
 
         {/* Capital hero card */}
-        <div className="relative z-10 rounded-2xl p-4 mb-3" style={{ background: 'rgba(255,255,255,0.12)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,0.18)' }}>
-          <p className="text-blue-100 text-xs font-semibold uppercase tracking-wide">Saldo pendiente total</p>
+        <div className="relative z-10 rounded-2xl p-4 mb-3" style={{ background: 'rgba(0,216,134,0.12)', backdropFilter: 'blur(8px)', border: '1px solid rgba(0,216,134,0.25)' }}>
+          <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#00D886', opacity: 0.85 }}>Saldo pendiente total</p>
           <p className="text-white text-4xl font-black leading-none mt-1">
             {formatCurrency(resumen.totalPendiente)}
           </p>
           <div className="flex gap-6 mt-3 pt-3 border-t border-white/20">
             <div>
-              <p className="text-blue-200 text-[10px] font-semibold uppercase">Prestado</p>
+              <p className="text-[10px] font-semibold uppercase" style={{ color: '#00D886', opacity: 0.7 }}>Prestado</p>
               <p className="text-white text-sm font-bold">{formatCurrency(resumen.totalPrestado)}</p>
             </div>
             <div>
-              <p className="text-blue-200 text-[10px] font-semibold uppercase">Recuperado</p>
+              <p className="text-[10px] font-semibold uppercase" style={{ color: '#00D886', opacity: 0.7 }}>Recuperado</p>
               <p className="text-white text-sm font-bold">{formatCurrency(resumen.totalRecuperado)}</p>
             </div>
           </div>
@@ -364,17 +375,17 @@ export default function DashboardPage() {
 
         {/* Quick stats row */}
         <div className="flex gap-2 relative z-10">
-          <div className="flex-1 rounded-xl py-2.5 px-3 text-center" style={{ background: 'rgba(255,255,255,0.1)' }}>
+          <div className="flex-1 rounded-xl py-2.5 px-3 text-center" style={{ background: 'rgba(0,216,134,0.10)' }}>
             <p className="text-white text-xl font-black leading-none">{clientesActivos}</p>
-            <p className="text-blue-200 text-[10px] font-semibold mt-0.5">Clientes activos</p>
+            <p className="text-[10px] font-semibold mt-0.5" style={{ color: '#00D886', opacity: 0.75 }}>Clientes activos</p>
           </div>
-          <div className="flex-1 rounded-xl py-2.5 px-3 text-center" style={{ background: 'rgba(255,255,255,0.1)' }}>
+          <div className="flex-1 rounded-xl py-2.5 px-3 text-center" style={{ background: 'rgba(0,216,134,0.10)' }}>
             <p className="text-white text-xl font-black leading-none">{resumen.prestamosActivos}</p>
-            <p className="text-blue-200 text-[10px] font-semibold mt-0.5">Préstamos activos</p>
+            <p className="text-[10px] font-semibold mt-0.5" style={{ color: '#00D886', opacity: 0.75 }}>Préstamos activos</p>
           </div>
-          <div className="flex-1 rounded-xl py-2.5 px-3 text-center" style={{ background: 'rgba(255,255,255,0.1)' }}>
+          <div className="flex-1 rounded-xl py-2.5 px-3 text-center" style={{ background: 'rgba(0,216,134,0.10)' }}>
             <p className="text-white text-xl font-black leading-none">{resumen.prestamosLiquidados}</p>
-            <p className="text-blue-200 text-[10px] font-semibold mt-0.5">Liquidados</p>
+            <p className="text-[10px] font-semibold mt-0.5" style={{ color: '#00D886', opacity: 0.75 }}>Liquidados</p>
           </div>
         </div>
       </div>

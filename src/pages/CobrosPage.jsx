@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { formatCurrency, formatDate, getEstatusPago, generarWhatsApp } from '../utils/calculos'
 import { calcularPenalizacion, calcularRedito } from '../utils/cobranza'
-import { generarEstadoCuenta } from '../utils/pdf'
+import { generarEstadoCuenta, generarReciboCobro } from '../utils/pdf'
 import { HandCoins, X, MessageCircle, Clock, CheckCircle2, AlertTriangle, RotateCcw, ChevronDown, FileText } from 'lucide-react'
 
 const ESTATUS_COLORS = {
@@ -56,15 +56,23 @@ export default function CobrosPage() {
   const handleGenerarPDF = async (pago) => {
     setGenerandoPDF(pago.id)
     try {
-      const prestamo = prestamos.find(p => p.id === pago.prestamo_id)
-      if (!prestamo) return
-      const cliente = prestamo.clientes || {}
-      const { data: todosPagos } = await import('../lib/supabase').then(m =>
-        m.supabase.from('pagos_programados').select('*')
-          .eq('prestamo_id', pago.prestamo_id)
-          .order('fecha_vencimiento', { ascending: true })
-      )
-      await generarEstadoCuenta(cliente, prestamo, todosPagos || [])
+      const { supabase } = await import('../lib/supabase')
+
+      // Obtener préstamo completo directo de Supabase
+      const { data: prestamo } = await supabase
+        .from('prestamos').select('*, clientes(*)')
+        .eq('id', pago.prestamo_id).maybeSingle()
+
+      if (!prestamo) { console.error('Préstamo no encontrado'); return }
+
+      const clienteCompleto = prestamo.clientes || {}
+
+      const { data: todosPagos } = await supabase
+        .from('pagos_programados').select('*')
+        .eq('prestamo_id', pago.prestamo_id)
+        .order('fecha_vencimiento', { ascending: true })
+
+      await generarReciboCobro(pago, prestamo, clienteCompleto, todosPagos || [])
     } catch (err) {
       console.error('Error al generar PDF:', err)
     } finally {
@@ -296,9 +304,17 @@ export default function CobrosPage() {
       </div>
 
       {/* ─── Modal unificado ─── */}
-      {selected && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end">
-          <div className="bg-white rounded-t-3xl w-full max-h-[92vh] flex flex-col">
+      {selected && (() => {
+        // Determinar el botón de acción según el modo
+        const btnConfig = {
+          [MODO.PAGO]:        { form: 'form-pago',        label: saving ? 'Guardando…' : 'Confirmar Pago',        cls: 'bg-brand-600' },
+          [MODO.PENALIZACION]:{ form: 'form-penalizacion', label: saving ? 'Aplicando…' : 'Aplicar Penalización',  cls: 'bg-red-500' },
+          [MODO.POSTERGAR]:   { form: 'form-postergar',   label: saving ? 'Procesando…' : 'Confirmar Postergación', cls: 'bg-purple-500' },
+        }[modo]
+
+        return (
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-end">
+          <div className="bg-white rounded-t-3xl w-full flex flex-col" style={{ maxHeight: '92dvh' }}>
             {/* Header */}
             <div className="flex items-center justify-between p-5 pb-3 shrink-0">
               <h2 className="text-lg font-black text-gray-800">
@@ -338,7 +354,8 @@ export default function CobrosPage() {
               ))}
             </div>
 
-            <div className="overflow-y-auto px-5 pb-8 space-y-3">
+            {/* Contenido scrollable — sin el botón de submit */}
+            <div className="overflow-y-auto px-5 pb-3 space-y-3 flex-1">
               {successMsg && (
                 <div className="bg-green-50 border border-green-200 text-green-700 text-sm rounded-xl px-3 py-2 font-semibold">{successMsg}</div>
               )}
@@ -348,7 +365,7 @@ export default function CobrosPage() {
 
               {/* ── PAGO NORMAL ── */}
               {modo === MODO.PAGO && (
-                <form onSubmit={handlePago} className="space-y-3">
+                <form id="form-pago" onSubmit={handlePago} className="space-y-3">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Monto a registrar *</label>
                     <input
@@ -365,16 +382,12 @@ export default function CobrosPage() {
                       className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
                     />
                   </div>
-                  <button type="submit" disabled={saving}
-                    className="w-full bg-brand-600 text-white font-bold py-3 rounded-xl disabled:opacity-60">
-                    {saving ? 'Guardando...' : 'Confirmar Pago'}
-                  </button>
                 </form>
               )}
 
               {/* ── PENALIZACIÓN ── */}
               {modo === MODO.PENALIZACION && (
-                <form onSubmit={handlePenalizacion} className="space-y-3">
+                <form id="form-penalizacion" onSubmit={handlePenalizacion} className="space-y-3">
                   <div className="bg-red-50 border border-red-100 rounded-xl px-3 py-2 text-xs text-red-700">
                     La penalización se suma al saldo pendiente de este pago.
                   </div>
@@ -419,16 +432,12 @@ export default function CobrosPage() {
                       </div>
                     </div>
                   )}
-                  <button type="submit" disabled={saving}
-                    className="w-full bg-red-500 text-white font-bold py-3 rounded-xl disabled:opacity-60">
-                    {saving ? 'Aplicando...' : 'Aplicar Penalización'}
-                  </button>
                 </form>
               )}
 
               {/* ── POSTERGAR ── */}
               {modo === MODO.POSTERGAR && (
-                <form onSubmit={handlePostergar} className="space-y-3">
+                <form id="form-postergar" onSubmit={handlePostergar} className="space-y-3">
                   <div className="bg-purple-50 border border-purple-100 rounded-xl px-3 py-2 text-xs text-purple-700">
                     El cliente paga solo el rédito. La quincena se mueve al siguiente periodo y se acumula con la próxima.
                   </div>
@@ -473,16 +482,27 @@ export default function CobrosPage() {
                       </div>
                     </div>
                   )}
-                  <button type="submit" disabled={saving}
-                    className="w-full bg-purple-500 text-white font-bold py-3 rounded-xl disabled:opacity-60">
-                    {saving ? 'Procesando...' : 'Confirmar Postergación'}
-                  </button>
                 </form>
               )}
             </div>
+
+            {/* Botón de acción — FIJO en la parte inferior, siempre visible */}
+            {!successMsg && (
+              <div className="shrink-0 px-5 pt-3 pb-6 border-t border-gray-100 bg-white">
+                <button
+                  type="submit"
+                  form={btnConfig.form}
+                  disabled={saving}
+                  className={`w-full text-white font-bold py-3.5 rounded-xl disabled:opacity-60 ${btnConfig.cls}`}
+                >
+                  {btnConfig.label}
+                </button>
+              </div>
+            )}
           </div>
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

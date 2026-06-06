@@ -34,7 +34,8 @@ const GRUPOS_FILTRO = {
 
 function formatFecha(ts) {
   if (!ts) return '—'
-  const d = new Date(ts)
+  const d = parseFecha(ts)
+  if (isNaN(d)) return '—'
   return d.toLocaleDateString('es-MX', {
     day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit'
@@ -46,13 +47,25 @@ function formatMoneda(monto) {
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(monto)
 }
 
+// Normaliza una fecha ISO (con o sin timezone) para evitar "Invalid Date"
+function parseFecha(ts) {
+  if (!ts) return new Date(NaN)
+  // Supabase devuelve timestamps con timezone: "2025-06-01T18:30:00+00:00"
+  // new Date() los maneja bien; pero si viene solo fecha "2025-06-01" hay
+  // que forzar mediodía para evitar desfase por timezone
+  return ts.includes('T') ? new Date(ts) : new Date(ts + 'T12:00:00')
+}
+
 // Agrupa movimientos por fecha (día)
 function agruparPorDia(movimientos) {
   const grupos = {}
   movimientos.forEach(m => {
-    const dia = new Date(m.fecha_movimiento).toLocaleDateString('es-MX', {
-      weekday: 'long', day: '2-digit', month: 'long', year: 'numeric'
-    })
+    const d = parseFecha(m.fecha_movimiento)
+    const dia = isNaN(d)
+      ? 'Sin fecha'
+      : d.toLocaleDateString('es-MX', {
+          weekday: 'long', day: '2-digit', month: 'long', year: 'numeric'
+        })
     if (!grupos[dia]) grupos[dia] = []
     grupos[dia].push(m)
   })

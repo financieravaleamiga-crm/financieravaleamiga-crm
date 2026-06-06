@@ -14,8 +14,20 @@ export default function Layout() {
   return (
     <div className="flex flex-col min-h-screen bg-gray-50">
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto pb-20">
+      <main className="flex-1 overflow-y-auto pb-24">
         <Outlet />
+
+        {/* Footer créditos */}
+        <div className="flex flex-col items-center gap-1.5 py-6 mt-4 border-t border-gray-100">
+          <span className="text-[9px] font-medium tracking-widest uppercase text-gray-400">Desarrollado por</span>
+          <a href="https://teers.mx" target="_blank" rel="noopener noreferrer" className="opacity-50 hover:opacity-80 transition-opacity">
+            <img
+              src="https://i.postimg.cc/DyM3vKyr/logo-teers-nuevo1.png"
+              alt="Teers"
+              className="h-4 w-auto object-contain"
+            />
+          </a>
+        </div>
       </main>
 
       {/* Bottom Navigation */}
@@ -28,7 +40,7 @@ export default function Layout() {
               className={({ isActive }) =>
                 `flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors
                 ${isActive
-                  ? 'text-brand-600'
+                  ? 'text-brand-500'
                   : 'text-gray-400 hover:text-gray-600'
                 }`
               }
@@ -38,7 +50,7 @@ export default function Layout() {
                   <div className={`p-1 rounded-xl transition-all ${isActive ? 'bg-brand-50' : ''}`}>
                     <Icon size={18} strokeWidth={isActive ? 2.5 : 1.8} />
                   </div>
-                  <span className={`text-[9px] font-semibold ${isActive ? 'text-brand-600' : 'text-gray-400'}`}>
+                  <span className={`text-[9px] font-semibold ${isActive ? 'text-brand-500' : 'text-gray-400'}`}>
                     {label}
                   </span>
                 </>

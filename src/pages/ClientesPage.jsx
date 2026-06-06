@@ -194,7 +194,7 @@ export default function ClientesPage() {
 
       {/* Modal: Nuevo / Editar Cliente */}
       {showForm && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-end">
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-end">
           <div className="bg-white rounded-t-3xl w-full max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between p-5 pb-3 shrink-0">
               <h2 className="text-lg font-black text-gray-800">
@@ -205,7 +205,7 @@ export default function ClientesPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="overflow-y-auto px-5 pb-8 space-y-3">
+            <form id="form-cliente" onSubmit={handleSubmit} className="overflow-y-auto px-5 pb-3 space-y-3 flex-1">
               {FORM_FIELDS.map(({ label, key, type, required }) => (
                 <div key={key}>
                   <label className="block text-xs font-semibold text-gray-600 mb-1">{label}</label>
@@ -224,15 +224,18 @@ export default function ClientesPage() {
                   {error}
                 </div>
               )}
+            </form>
 
+            <div className="shrink-0 px-5 pt-3 pb-6 border-t border-gray-100 bg-white">
               <button
                 type="submit"
+                form="form-cliente"
                 disabled={saving}
-                className="w-full bg-brand-600 text-white font-bold py-3 rounded-xl mt-2 disabled:opacity-60"
+                className="w-full bg-brand-600 text-white font-bold py-3.5 rounded-xl disabled:opacity-60"
               >
                 {saving ? 'Guardando...' : editingId ? 'Guardar Cambios' : 'Guardar Cliente'}
               </button>
-            </form>
+            </div>
           </div>
         </div>
       )}
